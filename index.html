@@ -19,8 +19,8 @@ input[type=file]{display:none}.row{display:flex;gap:9px}.row button{flex:1}.note
 </style>
 </head>
 <body><main>
-<h1>画面の文字を読み取ってコピー</h1>
-<p class="intro">画面に表示されている文章を読み取り、コピーするためのテストページです。「山田」と検索した結果の説明文などで試せます。</p>
+<h1>「山田」の後の英数字6文字をコピー</h1>
+<p class="intro">画面共有中に「山田」を検出し、その後に表示された英数字6文字を探します。見つかったコードを確認して、ワンタップでコピーできます。</p>
 <section class="card">
 <strong>方法1：画面共有で読み取る</strong>
 <p class="note">画面共有に対応したブラウザで使えます。共有を開始したあと、読み取りたい画面に切り替えてください。iPhoneのSafariなど、画面共有に対応していない環境では使えない場合があります。</p>
@@ -37,17 +37,18 @@ input[type=file]{display:none}.row{display:flex;gap:9px}.row button{flex:1}.note
 <button id="readImage" class="secondary" disabled>画像の文字を読み取る</button>
 </section>
 <section class="card">
-<strong>読み取った文章</strong>
-<p class="note">読み取り結果は下の欄で編集できます。必要な部分だけ選択してコピーすることもできます。</p>
-<textarea id="result" placeholder="読み取った文章がここに表示されます。"></textarea>
-<div class="row"><button id="copy">全文をコピー</button><button id="clear" class="secondary">消去</button></div>
+<strong>検出した6文字コード</strong>
+<textarea id="code" placeholder="「山田」の後にある英数字6文字がここに表示されます。" readonly style="min-height:70px;font-size:26px;text-align:center;letter-spacing:4px"></textarea>
+<button id="copyCode">6文字コードをコピー</button>
+<details style="margin-top:14px"><summary>OCRで読み取った全文を確認</summary><textarea id="result" placeholder="読み取った文章がここに表示されます。"></textarea></details>
+<button id="clear" class="secondary">消去</button>
 </section>
 <p class="note">文字認識は誤ることがあります。読み取り結果を確認してから使用してください。画像や画面の内容はこのページ内で処理します（OCRエンジンの読み込みにはインターネット接続が必要です）。</p>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 const video=$('preview'),status=$('status'),result=$('result');
-let stream=null,worker=null,timer=null,busy=false,selectedImage=null;
+let stream=null,worker=null,timer=null,busy=false,selectedImage=null,lastCode='';
 async function getWorker(){
  if(worker)return worker;
  if(!window.Tesseract)throw new Error('文字認識エンジンを読み込めません。ネット接続を確認してください。');
@@ -55,11 +56,27 @@ async function getWorker(){
  worker=await Tesseract.createWorker('jpn+eng');
  return worker;
 }
+function detectCode(text){
+ const lines=text.split(/\\r?\\n/);
+ for(const line of lines){
+  const p=line.indexOf('山田');
+  if(p<0)continue;
+  const after=line.slice(p+2).replace(/^[^A-Za-z0-9]*/, '');
+  const m=after.match(/[A-Za-z0-9]{6}/);
+  if(m){$('code').value=m[0];lastCode=m[0];status.textContent='「山田」の後の6文字を検出しました。コピーできます。';return true;}
+ }
+ return false;
+}
+function showOCR(text){
+ if(!text)return;
+ result.value=text;
+ if(!detectCode(text))status.textContent=text.includes('山田')?'「山田」は見つかりました。後ろの英数字6文字を探しています…':'画面共有中：「山田」を探しています…';
+}
 async function recognize(source){
  const w=await getWorker();
  const out=await w.recognize(source);
  const text=out.data.text.trim();
- if(text){result.value=text;status.textContent='読み取り完了。結果を確認してください。';}
+ if(text){showOCR(text);if(!$('code').value)status.textContent='読み取り完了。「山田」の後に6文字があるか確認してください。';}
  else status.textContent='文字を読み取れませんでした。画像を大きく・鮮明にして試してください。';
 }
 async function scan(){
@@ -70,8 +87,8 @@ async function scan(){
   c.width=Math.round(video.videoWidth*scale);c.height=Math.round(video.videoHeight*scale);
   c.getContext('2d').drawImage(video,0,0,c.width,c.height);
   const w=await getWorker(),out=await w.recognize(c),text=out.data.text.trim();
-  if(text){result.value=text;status.textContent='画面の文字を読み取りました。必要な部分を選んでコピーできます。';}
-  else status.textContent='共有中：文字を探しています…';
+  if(text){showOCR(text);}
+  else status.textContent='共有中：「山田」を探しています…';
  }catch(e){status.textContent='読み取りエラー：'+e.message;}
  finally{busy=false;}
 }
@@ -104,11 +121,11 @@ $('readImage').addEventListener('click',async()=>{
  try{status.textContent='画像を読み取っています…';await recognize(selectedImage);}
  catch(e){status.textContent='読み取りエラー：'+e.message;}
 });
-$('copy').addEventListener('click',async()=>{
- if(!result.value.trim()){status.textContent='コピーする文章がありません。';return;}
- try{await navigator.clipboard.writeText(result.value);status.textContent='全文をコピーしました。';}
- catch(e){result.focus();result.select();status.textContent='文章を選択しました。メニューからコピーしてください。';}
+$('copyCode').addEventListener('click',async()=>{
+ const code=$('code').value.trim();if(!code){status.textContent='まだ6文字コードが見つかっていません。';return;}
+ try{await navigator.clipboard.writeText(code);status.textContent='コード「'+code+'」をコピーしました。';}
+ catch(e){$('code').focus();$('code').select();status.textContent='コードを選択しました。メニューからコピーしてください。';}
 });
-$('clear').addEventListener('click',()=>{result.value='';status.textContent='読み取り結果を消去しました。'});
+$('clear').addEventListener('click',()=>{$('code').value='';result.value='';lastCode='';status.textContent='読み取り結果を消去しました。'});
 window.addEventListener('pagehide',stop);
 </script></body></html>
