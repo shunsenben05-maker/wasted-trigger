@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101521">
+<title>画面テキスト検出ツール</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+:root{color-scheme:dark;--bg:#101521;--panel:#1b2535;--line:#344258;--blue:#83b7ff;--muted:#afbdd0;--green:#80d6a4}
+*{box-sizing:border-box}body{margin:0;padding:22px 15px 42px;background:var(--bg);color:#f4f7fb;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:680px;margin:auto}h1{font-size:23px;margin:0 0 7px}.intro{color:var(--muted);line-height:1.6}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px;margin:14px 0}
+video{width:100%;max-height:300px;background:#090d14;border-radius:12px;display:block;object-fit:contain}
+button{width:100%;border:0;border-radius:12px;padding:14px;margin-top:10px;font-size:16px;font-weight:700;background:var(--blue);color:#101b2b}
+button.secondary{background:#35445c;color:#fff}button:disabled{opacity:.45}
+#status{font-size:14px;color:#d4e2f5;min-height:22px;margin-top:10px;line-height:1.5}
+.result{background:#0d1420;border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:10px;min-height:56px;font:700 21px/1.4 ui-monospace,monospace;overflow-wrap:anywhere}
+.note{font-size:12px;color:var(--muted);line-height:1.6}
+.badge{display:inline-block;background:#263a32;color:var(--green);border-radius:999px;padding:5px 9px;font-size:12px}
+.row{display:flex;gap:9px}.row button{flex:1}
+</style>
+</head>
+<body>
+<main>
+<h1>画面テキスト検出ツール</h1>
+<p class="intro">共有画面で「WASTED」の表示を検出し、その後に画面内で読み取れた英数字を候補として表示する試作版です。</p>
+<section class="card">
+<strong>画面共有</strong>
+<p class="note">画面共有を開始し、ブラウザの共有メニューで対象画面を選択してください。利用できるかどうかはiOS・Safariの対応状況によります。</p>
+<video id="preview" autoplay playsinline muted></video>
+<div class="row"><button id="start">画面共有を開始</button><button id="stop" class="secondary" disabled>停止</button></div>
+<div id="status" aria-live="polite">待機中です。</div>
+</section>
+<section class="card">
+<div class="row" style="align-items:center;justify-content:space-between">
+<strong>検出状態</strong><span id="state" class="badge">合図待ち</span>
+</div>
+<p class="note">「WASTED」を検出した後、画面内の英数字テキストを読み取って候補を表示します。</p>
+<div><strong>読み取り候補</strong></div>
+<div id="candidate" class="result">まだ候補はありません</div>
+<button id="copy" disabled>候補をコピー</button>
+<button id="reset" class="secondary">検出をリセット</button>
+<p class="note">コピー前に内容を確認してください。OCRは誤認識することがあります。候補の確認・コピーは手動です。共有を停止すると監視も終了します。</p>
+</section>
+</main>
+<script>
+const video=document.getElementById('preview'),statusEl=document.getElementById('status');
+const stateEl=document.getElementById('state'),candidateEl=document.getElementById('candidate');
+const startBtn=document.getElementById('start'),stopBtn=document.getElementById('stop'),copyBtn=document.getElementById('copy');
+let stream=null,worker=null,timer=null,busy=false,triggered=false,bestCandidate='';
+const TRIGGER=/\bW[\s._-]*A[\s._-]*S[\s._-]*T[\s._-]*E[\s._-]*D\b/i;
+function findCandidate(text){
+  const normalized=text.toUpperCase().replace(/[|]/g,'I');
+  const tokens=normalized.match(/[A-Z0-9][A-Z0-9 -]{8,24}[A-Z0-9]/g)||[];
+  const cleaned=tokens.map(s=>s.replace(/[^A-Z0-9]/g,'')).filter(s=>s.length>=10&&s.length<=20);
+  return cleaned.sort((a,b)=>b.length-a.length)[0]||'';
+}
+async function getWorker(){
+  if(worker)return worker;
+  if(!window.Tesseract)throw new Error('OCRライブラリを読み込めません。ネット接続を確認してください。');
+  statusEl.textContent='文字認識エンジンを準備中…';
+  worker=await Tesseract.createWorker('eng');
+  return worker;
+}
+async function scanFrame(){
+  if(busy||!stream||!video.videoWidth)return;
+  busy=true;
+  try{
+    const w=await getWorker();
+    const canvas=document.createElement('canvas');
+    const scale=Math.min(1,960/video.videoWidth);
+    canvas.width=Math.round(video.videoWidth*scale);
+    canvas.height=Math.round(video.videoHeight*scale);
+    canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
+    const {data:{text}}=await w.recognize(canvas);
+    if(!triggered){
+      if(TRIGGER.test(text)){
+        triggered=true;
+        stateEl.textContent='合図を検出';
+        statusEl.textContent='合図を検出しました。画面内の文字を確認しています…';
+      }else{
+        statusEl.textContent='合図を確認中…';
+      }
+    }else{
+      const found=findCandidate(text);
+      if(found){
+        bestCandidate=found;
+        candidateEl.textContent=found;
+        copyBtn.disabled=false;
+        stateEl.textContent='候補あり';
+        statusEl.textContent='英数字の候補を検出しました。内容を確認してコピーしてください。';
+      }else{
+        statusEl.textContent='合図を検出済み。文字を確認中…';
+      }
+    }
+  }catch(e){statusEl.textContent='読み取りエラー：'+(e.message||'再試行してください。');}
+  finally{busy=false;}
+}
+async function start(){
+  if(!navigator.mediaDevices?.getDisplayMedia){
+    statusEl.textContent='このブラウザでは画面共有APIが利用できません。HTTPS対応ブラウザでお試しください。';return;
+  }
+  try{
+    stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});
+    video.srcObject=stream;
+    startBtn.disabled=true;stopBtn.disabled=false;
+    statusEl.textContent='共有中。合図の文字を確認しています…';
+    stream.getVideoTracks()[0].addEventListener('ended',stop,{once:true});
+    timer=setInterval(scanFrame,1200);
+  }catch(e){statusEl.textContent='共有を開始できませんでした。共有許可とSafariの対応状況を確認してください。';}
+}
+function stop(){
+  if(timer){clearInterval(timer);timer=null;}
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  video.srcObject=null;startBtn.disabled=false;stopBtn.disabled=true;
+  statusEl.textContent='共有を停止しました。';
+}
+startBtn.addEventListener('click',start);
+stopBtn.addEventListener('click',stop);
+copyBtn.addEventListener('click',async()=>{
+  if(!bestCandidate)return;
+  try{await navigator.clipboard.writeText(bestCandidate);statusEl.textContent='候補をコピーしました。';}
+  catch(e){statusEl.textContent='自動コピーできません。候補を長押ししてコピーしてください。';}
+});
+document.getElementById('reset').addEventListener('click',()=>{
+  triggered=false;bestCandidate='';candidateEl.textContent='まだ候補はありません';copyBtn.disabled=true;
+  stateEl.textContent='合図待ち';statusEl.textContent='検出をリセットしました。';
+});
+window.addEventListener('pagehide',stop);
+</script>
+</body>
+</html>
